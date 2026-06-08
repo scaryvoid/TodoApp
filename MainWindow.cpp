@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QHeaderView>
 
 // ---------------- JSON Helpers ----------------
 
@@ -21,7 +22,8 @@ QJsonObject todoToJson(const TodoItem &t)
     obj["completed"] = t.completed.toString(Qt::ISODate);
     obj["notes"] = t.notes;
     obj["done"] = t.done;
-    obj["color"] = t.color.name();
+    obj["color"] = t.color.isValid() ? t.color.name() : "";
+
     return obj;
 }
 
@@ -33,7 +35,10 @@ TodoItem jsonToTodo(const QJsonObject &obj)
     t.completed = QDateTime::fromString(obj["completed"].toString(), Qt::ISODate);
     t.notes = obj["notes"].toString();
     t.done = obj["done"].toBool();
-    t.color = QColor(obj["color"].toString());
+    QColor color(obj["color"].toString());
+    if (color.isValid())
+        t.color = color;
+
     return t;
 }
 
@@ -94,6 +99,7 @@ void MainWindow::setupUI()
 {
     tabWidget = new QTabWidget;
     tabWidget->setContextMenuPolicy(Qt::CustomContextMenu);
+    tabWidget->setMovable(true);
 
     connect(tabWidget, &QTabWidget::customContextMenuRequested,
             this, &MainWindow::showTabContextMenu);
@@ -132,6 +138,8 @@ QTreeWidget* MainWindow::createTodoTree()
 
         if (done)
             data.completed = QDateTime::currentDateTime();
+        else
+            data.completed = QDateTime();
 
         item->setText(2, data.completed.toString());
 
@@ -142,6 +150,24 @@ QTreeWidget* MainWindow::createTodoTree()
         item->setData(0, Qt::UserRole, QVariant::fromValue(data));
         saveToFile();
     });
+    // double click
+    connect(
+        tree,
+        &QTreeWidget::itemDoubleClicked,
+        this,
+        [this](QTreeWidgetItem *, int)
+        {
+            editTask();
+        });
+    // save column widths
+    connect(
+        tree->header(),
+        &QHeaderView::sectionResized,
+        this,
+        [this](int, int, int)
+        {
+            saveToFile();
+        });
 
     // Drag & drop
     tree->setDragEnabled(true);
@@ -244,6 +270,25 @@ void MainWindow::addSubTask()
     saveToFile();
 }
 
+void MainWindow::editTask()
+{
+    auto tree = static_cast<QTreeWidget*>(tabWidget->currentWidget());
+    auto item = tree->currentItem();
+    if (!item) return;
+
+    TodoItem data = item->data(0, Qt::UserRole).value<TodoItem>();
+
+    QString text = QInputDialog::getText(this, "Edit Task", "Task:",
+                                         QLineEdit::Normal, data.title);
+    if (text.isEmpty() || text == data.title) return;
+
+    data.title = text;
+    item->setText(0, text);
+    item->setData(0, Qt::UserRole, QVariant::fromValue(data));
+
+    saveToFile();
+}
+
 void MainWindow::deleteTask()
 {
     auto tree = static_cast<QTreeWidget*>(tabWidget->currentWidget());
@@ -282,6 +327,7 @@ void MainWindow::showItemContextMenu(const QPoint &pos)
 
     if (item) {
         menu.addAction("Add Subtask", this, &MainWindow::addSubTask);
+        menu.addAction("Edit", this, &MainWindow::editTask);
         menu.addAction("Delete", this, &MainWindow::deleteTask);
         menu.addAction("Set Color", this, &MainWindow::setColor);
     }
@@ -331,6 +377,12 @@ void MainWindow::saveToFile()
         QJsonObject tabObj;
         tabObj["name"] = tabWidget->tabText(i);
 
+        QJsonArray columnWidths;
+        for (int col = 0; col < tree->columnCount(); ++col)
+            columnWidths.append(tree->columnWidth(col));
+
+        tabObj["columnWidths"] = columnWidths;
+
         QJsonArray items;
         for (int j = 0; j < tree->topLevelItemCount(); ++j)
             items.append(itemToJson(tree->topLevelItem(j)));
@@ -359,6 +411,15 @@ void MainWindow::loadFromFile()
 
         QTreeWidget *tree = createTodoTree();
         tabWidget->addTab(tree, tabObj["name"].toString());
+
+        QJsonArray widths = tabObj["columnWidths"].toArray();
+
+        for (int col = 0;
+             col < widths.size() && col < tree->columnCount();
+             ++col)
+        {
+            tree->setColumnWidth(col, widths[col].toInt());
+        }
 
         QJsonArray items = tabObj["items"].toArray();
         for (auto itemVal : items)

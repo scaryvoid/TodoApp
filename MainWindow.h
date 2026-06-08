@@ -36,6 +36,7 @@ private slots:
 
     void addTask();
     void addSubTask();
+    void editTask();
     void deleteTask();
     void setColor();
 
